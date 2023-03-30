@@ -1,0 +1,8 @@
+[package]
+name = "rovote"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+plonky2 = { git = "https://github.com/mir-protocol/plonky2" }
+anyhow = "1.0.56"
