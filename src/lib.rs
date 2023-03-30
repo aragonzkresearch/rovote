@@ -8,3 +8,5 @@ pub type C = PoseidonGoldilocksConfig;
 pub type PlonkyProof = Proof<F, PoseidonGoldilocksConfig, 2>;
 
 mod innerproof;
+mod outerproof;
+mod voter;

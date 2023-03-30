@@ -31,9 +31,14 @@ pub struct ProofPackage {
 }
 
 impl CensusTree {
+    pub fn new(pks: Vec<Vec<F>>) -> Self {
+        CensusTree(MerkleTree::new(pks, 0))
+    }
+
     pub fn tree_height(&self) -> usize {
         self.0.leaves.len().trailing_zeros() as usize
     }
+
     pub fn root(&self) -> Digest {
         self.0
             .cap
@@ -168,7 +173,6 @@ impl CensusTree {
     }
 
     pub fn verify_proof(
-        &self,
         chain_id: usize,
         process_id: usize,
         census_root: Digest,
@@ -192,8 +196,7 @@ impl CensusTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::innerproof::{Digest, F};
-    use plonky2::field::types::{Field, Sample};
+    use plonky2::field::types::Sample;
 
     #[test]
     fn test_inner_proof() {
@@ -210,7 +213,7 @@ mod tests {
             })
             .collect();
 
-        let census_tree = CensusTree(MerkleTree::new(pks, 0));
+        let census_tree = CensusTree::new(pks);
 
         let census_root = census_tree.root();
 
@@ -219,8 +222,7 @@ mod tests {
         let (proof, vd) = census_tree
             .gen_proof(chain_id, process_id, sks[i], i)
             .unwrap();
-        census_tree
-            .verify_proof(chain_id, process_id, census_root, proof, &vd)
-            .unwrap();
+
+        CensusTree::verify_proof(chain_id, process_id, census_root, proof, &vd).unwrap();
     }
 }
