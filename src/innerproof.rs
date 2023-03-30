@@ -7,15 +7,11 @@ use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
+use plonky2::plonk::circuit_data::{CircuitConfig, VerifierCircuitData};
+use plonky2::plonk::config::Hasher;
+use plonky2::plonk::proof::ProofWithPublicInputs;
 
-use plonky2::field::goldilocks_field::GoldilocksField;
-use plonky2::plonk::config::PoseidonGoldilocksConfig;
-use plonky2::plonk::proof::Proof;
-
-pub type F = GoldilocksField;
-pub type Digest = [F; 4];
-pub type C = PoseidonGoldilocksConfig;
-pub type PlonkyProof = Proof<F, PoseidonGoldilocksConfig, 2>;
+use crate::{Digest, PlonkyProof, C, F};
 
 pub struct CensusTargets {
     chain_id: Target,
@@ -38,6 +34,17 @@ impl CensusTree {
     pub fn tree_height(&self) -> usize {
         self.0.leaves.len().trailing_zeros() as usize
     }
+    pub fn root(&self) -> Digest {
+        self.0
+            .cap
+            .0
+            .iter()
+            .flat_map(|h| h.elements)
+            .collect::<Vec<F>>()
+            .try_into()
+            .unwrap()
+    }
+
     pub fn circuit(&self, builder: &mut CircuitBuilder<F, 2>) -> CensusTargets {
         // Register public inputs.
         let chain_id: Target = builder.add_virtual_target().try_into().unwrap();
@@ -116,5 +123,104 @@ impl CensusTree {
         {
             pw.set_hash_target(ht, h);
         }
+    }
+}
+
+// proof related
+impl CensusTree {
+    pub fn gen_proof(
+        &self,
+        chain_id: usize,
+        process_id: usize,
+        sk: Digest,
+        pk_i: usize,
+    ) -> Result<(ProofPackage, VerifierCircuitData<F, C, 2>)> {
+        let nullifier = PoseidonHash::hash_no_pad(
+            &[
+                sk,
+                [
+                    F::from_canonical_usize(chain_id),
+                    F::from_canonical_usize(process_id),
+                    F::ZERO,
+                    F::ZERO,
+                ],
+            ]
+            .concat(),
+        )
+        .elements;
+        let config = CircuitConfig::standard_recursion_zk_config();
+        let mut builder = CircuitBuilder::new(config);
+        let mut pw = PartialWitness::new();
+
+        let targets = self.circuit(&mut builder);
+        self.fill_census_targets(&mut pw, chain_id, process_id, sk, pk_i, targets);
+
+        let data = builder.build();
+        let proof = data.prove(pw)?;
+
+        Ok((
+            ProofPackage {
+                nullifier,
+                proof: proof.proof,
+            },
+            data.verifier_data(),
+        ))
+    }
+
+    pub fn verify_proof(
+        &self,
+        chain_id: usize,
+        process_id: usize,
+        census_root: Digest,
+        proof: ProofPackage,
+        verifier_data: &VerifierCircuitData<F, C, 2>,
+    ) -> Result<()> {
+        let public_inputs: Vec<F> = vec![F::from_canonical_usize(chain_id)]
+            .into_iter()
+            .chain(vec![F::from_canonical_usize(process_id)].into_iter())
+            .chain(census_root)
+            .chain(proof.nullifier)
+            .collect();
+
+        verifier_data.verify(ProofWithPublicInputs {
+            proof: proof.proof,
+            public_inputs,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::innerproof::{Digest, F};
+    use plonky2::field::types::{Field, Sample};
+
+    #[test]
+    fn test_inner_proof() {
+        let chain_id = 42;
+        let process_id = 3;
+        let n = 256;
+        let sks: Vec<Digest> = (0..n).map(|_| F::rand_array()).collect();
+        let pks: Vec<Vec<F>> = sks
+            .iter()
+            .map(|&sk| {
+                PoseidonHash::hash_no_pad(&[sk, [F::ZERO; 4]].concat())
+                    .elements
+                    .to_vec()
+            })
+            .collect();
+
+        let census_tree = CensusTree(MerkleTree::new(pks, 0));
+
+        let census_root = census_tree.root();
+
+        let i = 84;
+
+        let (proof, vd) = census_tree
+            .gen_proof(chain_id, process_id, sks[i], i)
+            .unwrap();
+        census_tree
+            .verify_proof(chain_id, process_id, census_root, proof, &vd)
+            .unwrap();
     }
 }
